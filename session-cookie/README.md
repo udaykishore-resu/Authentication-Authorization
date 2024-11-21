@@ -9,8 +9,11 @@ A cookie is a file that holds information that a server can write to a client's 
 When we access different apps and websites, there are basically three important security steps occurring continuously:
 
 `Identity`
+
 `Authentication`
+
 `Authorization`
+
 
 All of these processes occur at API Gateway.
 
@@ -80,9 +83,13 @@ The `AuthMiddleware` function then uses this cookie to authenticate the user:
 
 
 `session, _ := sm.Store.Get(r, "session-name")`
+
 `if session.Values["user_id"] == nil {`
-    `http.Error(w, "Unauthorized", http.StatusUnauthorized)`
-    `return`
+
+`    http.Error(w, "Unauthorized", http.StatusUnauthorized)`
+    
+`    return`
+    
 `}`
 
 # 7. Server Checks Session ID
