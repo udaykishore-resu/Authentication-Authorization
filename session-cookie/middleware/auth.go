@@ -2,19 +2,22 @@ package middleware
 
 import (
 	"net/http"
-	"session-cookie/handlers"
+	"session-cookie/session"
 )
 
-func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		sm := handlers.NewSessionManager()
-
-		session, _ := sm.Store.Get(r, "session-name")
-
-		if session.Values["user_id"] == nil {
-			http.Error(rw, "Unathorized", http.StatusUnauthorized)
+func AuthMiddleware(next http.HandlerFunc, sessionManager *session.SessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("session_token")
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(rw, r)
+
+		if !sessionManager.ValidateSession(cookie.Value) {
+			http.Error(w, "Invalid session", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
 	}
 }

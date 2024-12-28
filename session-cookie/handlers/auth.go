@@ -2,75 +2,95 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
-	"log"
 	"net/http"
 	"session-cookie/database"
-
-	"github.com/google/uuid"
-	"github.com/gorilla/sessions"
+	"session-cookie/logger"
+	"session-cookie/session"
+	"time"
 )
 
-type SessionManager struct {
-	Store *sessions.CookieStore
+type Handler struct {
+	userRepo       *database.UserRepository
+	sessionManager *session.SessionManager
+	logger         *logger.Logger
 }
 
-func NewSessionManager() *SessionManager {
-	return &SessionManager{
-		Store: sessions.NewCookieStore([]byte("secret-key")),
+func NewHandler(
+	userRepo *database.UserRepository,
+	sessionManager *session.SessionManager,
+	logger *logger.Logger,
+) *Handler {
+	return &Handler{
+		userRepo:       userRepo,
+		sessionManager: sessionManager,
+		logger:         logger,
 	}
 }
 
-func LoginHandler(db *database.DB, sm *SessionManager) http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		var creds struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-			http.Error(rw, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		user, err := db.GetUser(creds.Username)
-		if err != nil {
-			if err.Error() == fmt.Sprintf("no user found with username: %s", creds.Username) {
-				http.Error(rw, "Invalid credentials", http.StatusUnauthorized)
-			} else {
-				http.Error(rw, "Internal server error", http.StatusInternalServerError)
-				log.Printf("Error getting user: %v", err)
-			}
-			return
-		}
-
-		if user.Password != creds.Password {
-			http.Error(rw, "Invalid credentials", http.StatusUnauthorized)
-			return
-		}
-
-		session, _ := sm.Store.Get(r, "session-name")
-		session.Values["user_id"] = user.ID
-		session.Values["session_id"] = uuid.New().String()
-		session.Options.MaxAge = 3600
-		session.Save(r, rw)
-
-		rw.WriteHeader(http.StatusOK)
-
-		json.NewEncoder(rw).Encode(map[string]string{
-			"message": "Logged in Successfully!!!",
-		})
-	}
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
-func LogoutHandler(sm *SessionManager) http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		session, _ := sm.Store.Get(r, "session-name")
-		session.Options.MaxAge = -1
-		session.Save(r, rw)
-		rw.WriteHeader(http.StatusOK)
-
-		json.NewEncoder(rw).Encode(map[string]string{
-			"message": "Logged out Successfully ",
-		})
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
 	}
+
+	user, err := h.userRepo.Authenticate(req.Username, req.Password)
+	if err != nil {
+		h.logger.Error("Authentication failed")
+
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	// Create session
+	sessionID := h.sessionManager.CreateSession(user)
+
+	// Set session cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    sessionID,
+		Expires:  time.Now().Add(24 * time.Hour),
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   true,
+	})
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Login successful"})
+}
+
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("session_token")
+	if err != nil {
+		http.Error(w, "No session found", http.StatusBadRequest)
+		return
+	}
+
+	h.sessionManager.DeleteSession(cookie.Value)
+
+	// Clear cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    "",
+		Expires:  time.Now().Add(-1 * time.Hour),
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   true,
+	})
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Logout successful"})
+}
+
+func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "healthy",
+		"message": "Database connection is active",
+	})
 }
